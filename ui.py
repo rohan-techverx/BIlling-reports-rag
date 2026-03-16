@@ -177,8 +177,19 @@ if not os.path.exists("vector_db"):
     st.error("❌ Vector database not found! Please run `python rag/ingest.py` first to index the documents.")
     st.stop()
 
-if not os.getenv("OPENAI_API_KEY"):
-    st.error("❌ OPENAI_API_KEY not found! Please set it in your .env file.")
+# Check for API key in Streamlit secrets (for Streamlit Cloud) or environment variable
+api_key = None
+try:
+    if hasattr(st, 'secrets') and 'OPENAI_API_KEY' in st.secrets:
+        api_key = st.secrets['OPENAI_API_KEY']
+except (AttributeError, KeyError):
+    pass
+
+if not api_key:
+    api_key = os.getenv("OPENAI_API_KEY")
+
+if not api_key:
+    st.error("❌ OPENAI_API_KEY not found! Please set it in Streamlit Cloud secrets (Settings → Secrets) or .env file.")
     st.stop()
 
 # Initialize session state

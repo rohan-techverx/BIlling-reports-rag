@@ -12,11 +12,29 @@ import os
 import re
 from dotenv import load_dotenv
 
-# Load environment variables
+# Load environment variables (works locally)
 load_dotenv()
 
-# Initialize embeddings
-embeddings = OpenAIEmbeddings()
+# Get API key from Streamlit secrets (for Streamlit Cloud) or environment variable
+def get_openai_api_key():
+    """Get OpenAI API key from Streamlit secrets or environment variable."""
+    try:
+        import streamlit as st
+        # Try Streamlit secrets first (for Streamlit Cloud)
+        if hasattr(st, 'secrets') and 'OPENAI_API_KEY' in st.secrets:
+            return st.secrets['OPENAI_API_KEY']
+    except (ImportError, AttributeError, KeyError):
+        pass
+    
+    # Fall back to environment variable
+    return os.getenv("OPENAI_API_KEY")
+
+# Initialize embeddings with API key
+api_key = get_openai_api_key()
+if not api_key:
+    raise ValueError("OPENAI_API_KEY not found. Please set it in Streamlit Cloud secrets or .env file.")
+
+embeddings = OpenAIEmbeddings(openai_api_key=api_key)
 
 # Load vector database
 vector_db = Chroma(
@@ -33,7 +51,8 @@ retriever = vector_db.as_retriever(
 # Initialize LLM - Low temperature for concise, factual responses
 llm = ChatOpenAI(
     model="gpt-4o-mini",
-    temperature=0  # Zero temperature for most concise, factual answers
+    temperature=0,  # Zero temperature for most concise, factual answers
+    openai_api_key=api_key
 )
 
 # Format documents function - Clean formatting for concise answers
