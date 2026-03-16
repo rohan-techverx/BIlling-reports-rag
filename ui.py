@@ -172,6 +172,22 @@ st.markdown("""
 st.markdown('<div class="main-header">📄 Billing Documentation AI Assistant</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitle">Ask questions about the Customer Billing Report documentation</div>', unsafe_allow_html=True)
 
+# Check for API key in Streamlit secrets (for Streamlit Cloud) or environment variable
+api_key = None
+try:
+    if hasattr(st, 'secrets') and 'OPENAI_API_KEY' in st.secrets:
+        api_key = st.secrets['OPENAI_API_KEY']
+except (AttributeError, KeyError):
+    pass
+
+if not api_key:
+    api_key = os.getenv("OPENAI_API_KEY")
+
+if not api_key:
+    st.error("❌ OPENAI_API_KEY not found! Please set it in Streamlit Cloud secrets (Settings → Secrets) or .env file.")
+    st.info("💡 To set it in Streamlit Cloud: Go to 'Manage app' → 'Settings' → 'Secrets' → Add 'OPENAI_API_KEY'")
+    st.stop()
+
 # Check prerequisites and auto-create vector database if needed
 if not os.path.exists("vector_db"):
     with st.spinner("🔄 Vector database not found. Creating it now (this may take a minute)..."):
@@ -186,8 +202,8 @@ if not os.path.exists("vector_db"):
                 progress_messages.append(message)
                 progress_container.text("\n".join(progress_messages[-5:]))  # Show last 5 messages
             
-            # Run ingestion
-            chunks_count = ingest_documents(progress_callback=progress_callback)
+            # Run ingestion with API key passed directly
+            chunks_count = ingest_documents(progress_callback=progress_callback, api_key=api_key)
             
             progress_container.empty()
             st.success(f"✅ Vector database created successfully! Indexed {chunks_count} document chunks.")
@@ -197,24 +213,9 @@ if not os.path.exists("vector_db"):
         except Exception as e:
             st.error(f"❌ Error creating vector database: {str(e)}")
             st.info("Please ensure:")
-            st.info("1. OPENAI_API_KEY is set in Streamlit Cloud secrets or .env file")
+            st.info("1. OPENAI_API_KEY is set in Streamlit Cloud secrets (Settings → Secrets)")
             st.info("2. The data/billing_requirements.txt file exists")
             st.stop()
-
-# Check for API key in Streamlit secrets (for Streamlit Cloud) or environment variable
-api_key = None
-try:
-    if hasattr(st, 'secrets') and 'OPENAI_API_KEY' in st.secrets:
-        api_key = st.secrets['OPENAI_API_KEY']
-except (AttributeError, KeyError):
-    pass
-
-if not api_key:
-    api_key = os.getenv("OPENAI_API_KEY")
-
-if not api_key:
-    st.error("❌ OPENAI_API_KEY not found! Please set it in Streamlit Cloud secrets (Settings → Secrets) or .env file.")
-    st.stop()
 
 # Initialize session state
 if "question_input" not in st.session_state:

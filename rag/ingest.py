@@ -26,12 +26,13 @@ def get_openai_api_key():
     # Fall back to environment variable
     return os.getenv("OPENAI_API_KEY")
 
-def ingest_documents(progress_callback=None):
+def ingest_documents(progress_callback=None, api_key=None):
     """
     Load, chunk, and index the billing documentation.
     
     Args:
         progress_callback: Optional function to call with progress messages (for Streamlit)
+        api_key: Optional OpenAI API key. If not provided, will try to get from secrets/env
     """
     
     def log(message):
@@ -41,10 +42,12 @@ def ingest_documents(progress_callback=None):
         else:
             print(message)
     
-    # Get API key
-    api_key = get_openai_api_key()
+    # Get API key if not provided
     if not api_key:
-        raise ValueError("OPENAI_API_KEY not found. Please set it in Streamlit Cloud secrets or .env file.")
+        api_key = get_openai_api_key()
+    
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY not found. Please set it in Streamlit Cloud secrets (Settings → Secrets) or .env file.")
     
     log("Loading billing documentation...")
     loader = TextLoader("data/billing_requirements.txt", encoding="utf-8")
