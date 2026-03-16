@@ -15,6 +15,13 @@ from dotenv import load_dotenv
 # Load environment variables (works locally)
 load_dotenv()
 
+# Module-level cache for initialized components
+_embeddings = None
+_vector_db = None
+_retriever = None
+_llm = None
+_qa_chain = None
+
 # Get API key from Streamlit secrets (for Streamlit Cloud) or environment variable
 def get_openai_api_key():
     """Get OpenAI API key from Streamlit secrets or environment variable."""
@@ -29,31 +36,49 @@ def get_openai_api_key():
     # Fall back to environment variable
     return os.getenv("OPENAI_API_KEY")
 
-# Initialize embeddings with API key
-api_key = get_openai_api_key()
-if not api_key:
-    raise ValueError("OPENAI_API_KEY not found. Please set it in Streamlit Cloud secrets or .env file.")
+def get_embeddings():
+    """Get or create embeddings instance."""
+    global _embeddings
+    if _embeddings is None:
+        api_key = get_openai_api_key()
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY not found. Please set it in Streamlit Cloud secrets (Settings → Secrets) or .env file.")
+        _embeddings = OpenAIEmbeddings(openai_api_key=api_key)
+    return _embeddings
 
-embeddings = OpenAIEmbeddings(openai_api_key=api_key)
+def get_vector_db():
+    """Get or create vector database instance."""
+    global _vector_db
+    if _vector_db is None:
+        _vector_db = Chroma(
+            persist_directory="vector_db",
+            embedding_function=get_embeddings()
+        )
+    return _vector_db
 
-# Load vector database
-vector_db = Chroma(
-    persist_directory="vector_db",
-    embedding_function=embeddings
-)
+def get_retriever():
+    """Get or create retriever instance."""
+    global _retriever
+    if _retriever is None:
+        _retriever = get_vector_db().as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": 3}  # 3 chunks for focused, concise answers
+        )
+    return _retriever
 
-# Create retriever - Optimized for concise answers
-retriever = vector_db.as_retriever(
-    search_type="similarity",
-    search_kwargs={"k": 3}  # 3 chunks for focused, concise answers
-)
-
-# Initialize LLM - Low temperature for concise, factual responses
-llm = ChatOpenAI(
-    model="gpt-4o-mini",
-    temperature=0,  # Zero temperature for most concise, factual answers
-    openai_api_key=api_key
-)
+def get_llm():
+    """Get or create LLM instance."""
+    global _llm
+    if _llm is None:
+        api_key = get_openai_api_key()
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY not found. Please set it in Streamlit Cloud secrets (Settings → Secrets) or .env file.")
+        _llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0,  # Zero temperature for most concise, factual answers
+            openai_api_key=api_key
+        )
+    return _llm
 
 # Format documents function - Clean formatting for concise answers
 def format_docs(docs):
@@ -88,16 +113,20 @@ Question: {question}
 Provide a concise, direct answer:""")
 ])
 
-# Create QA chain using LCEL
-qa_chain = (
-    {
-        "context": retriever | format_docs,
-        "question": RunnablePassthrough()
-    }
-    | prompt_template
-    | llm
-    | StrOutputParser()
-)
+def get_qa_chain():
+    """Get or create QA chain instance."""
+    global _qa_chain
+    if _qa_chain is None:
+        _qa_chain = (
+            {
+                "context": get_retriever() | format_docs,
+                "question": RunnablePassthrough()
+            }
+            | prompt_template
+            | get_llm()
+            | StrOutputParser()
+        )
+    return _qa_chain
 
 def check_source_relevance(source_content: str, question: str, answer: str) -> bool:
     """
@@ -183,6 +212,10 @@ def query(question: str):
     Returns:
         Dictionary with 'result' (answer), 'source_documents', and 'relevant_sources'
     """
+    # Get components (lazy initialization)
+    retriever = get_retriever()
+    qa_chain = get_qa_chain()
+    
     # Get source documents first
     source_docs = retriever.invoke(question)
     
