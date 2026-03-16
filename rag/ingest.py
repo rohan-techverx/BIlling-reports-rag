@@ -13,21 +13,47 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-def ingest_documents():
-    """Load, chunk, and index the billing documentation."""
+def get_openai_api_key():
+    """Get OpenAI API key from Streamlit secrets or environment variable."""
+    try:
+        import streamlit as st
+        # Try Streamlit secrets first (for Streamlit Cloud)
+        if hasattr(st, 'secrets') and 'OPENAI_API_KEY' in st.secrets:
+            return st.secrets['OPENAI_API_KEY']
+    except (ImportError, AttributeError, KeyError):
+        pass
     
-    # Check if OpenAI API key is set
-    if not os.getenv("OPENAI_API_KEY"):
-        raise ValueError("OPENAI_API_KEY not found in environment variables. Please set it in .env file.")
+    # Fall back to environment variable
+    return os.getenv("OPENAI_API_KEY")
+
+def ingest_documents(progress_callback=None):
+    """
+    Load, chunk, and index the billing documentation.
     
-    print("Loading billing documentation...")
+    Args:
+        progress_callback: Optional function to call with progress messages (for Streamlit)
+    """
+    
+    def log(message):
+        """Log message to console or Streamlit."""
+        if progress_callback:
+            progress_callback(message)
+        else:
+            print(message)
+    
+    # Get API key
+    api_key = get_openai_api_key()
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY not found. Please set it in Streamlit Cloud secrets or .env file.")
+    
+    log("Loading billing documentation...")
     loader = TextLoader("data/billing_requirements.txt", encoding="utf-8")
     documents = loader.load()
     
-    print(f"Loaded {len(documents)} document(s)")
+    log(f"Loaded {len(documents)} document(s)")
     
     # Split documents into chunks
-    print("Splitting documents into chunks...")
+    log("Splitting documents into chunks...")
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=800,
         chunk_overlap=100,
@@ -35,14 +61,14 @@ def ingest_documents():
     )
     
     chunks = text_splitter.split_documents(documents)
-    print(f"Created {len(chunks)} chunks")
+    log(f"Created {len(chunks)} chunks")
     
     # Create embeddings
-    print("Creating embeddings...")
-    embeddings = OpenAIEmbeddings()
+    log("Creating embeddings...")
+    embeddings = OpenAIEmbeddings(openai_api_key=api_key)
     
     # Create vector store
-    print("Storing in vector database...")
+    log("Storing in vector database...")
     vector_db = Chroma.from_documents(
         documents=chunks,
         embedding=embeddings,
@@ -52,9 +78,11 @@ def ingest_documents():
     # Persist the database
     vector_db.persist()
     
-    print("\n✅ Documents successfully indexed!")
-    print(f"Vector database stored in: vector_db/")
-    print(f"Total chunks indexed: {len(chunks)}")
+    log("\n✅ Documents successfully indexed!")
+    log(f"Vector database stored in: vector_db/")
+    log(f"Total chunks indexed: {len(chunks)}")
+    
+    return len(chunks)
 
 if __name__ == "__main__":
     ingest_documents()

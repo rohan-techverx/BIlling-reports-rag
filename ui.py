@@ -172,10 +172,34 @@ st.markdown("""
 st.markdown('<div class="main-header">📄 Billing Documentation AI Assistant</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitle">Ask questions about the Customer Billing Report documentation</div>', unsafe_allow_html=True)
 
-# Check prerequisites
+# Check prerequisites and auto-create vector database if needed
 if not os.path.exists("vector_db"):
-    st.error("❌ Vector database not found! Please run `python rag/ingest.py` first to index the documents.")
-    st.stop()
+    with st.spinner("🔄 Vector database not found. Creating it now (this may take a minute)..."):
+        try:
+            from rag.ingest import ingest_documents
+            
+            # Create a progress container
+            progress_container = st.empty()
+            progress_messages = []
+            
+            def progress_callback(message):
+                progress_messages.append(message)
+                progress_container.text("\n".join(progress_messages[-5:]))  # Show last 5 messages
+            
+            # Run ingestion
+            chunks_count = ingest_documents(progress_callback=progress_callback)
+            
+            progress_container.empty()
+            st.success(f"✅ Vector database created successfully! Indexed {chunks_count} document chunks.")
+            st.info("🔄 Please refresh the page to continue.")
+            st.stop()
+            
+        except Exception as e:
+            st.error(f"❌ Error creating vector database: {str(e)}")
+            st.info("Please ensure:")
+            st.info("1. OPENAI_API_KEY is set in Streamlit Cloud secrets or .env file")
+            st.info("2. The data/billing_requirements.txt file exists")
+            st.stop()
 
 # Check for API key in Streamlit secrets (for Streamlit Cloud) or environment variable
 api_key = None
