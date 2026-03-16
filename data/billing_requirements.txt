@@ -1,0 +1,1007 @@
+Requirements 1.0
+Brokered Customer Billing Report
+Document Version: 1.0
+Date: February 2026
+Status: Current Working Implementation (Baseline)
+Prepared By: Techverx Development Team
+Purpose
+This document defines the current, production-working requirements for the Brokered Customer Billing Report.
+These requirements were established through:
+Existing production code analysis
+Historical behavior
+Client meetings and clarifications
+Formal business rules were not fully documented at the start of development. This document serves as the authoritative baseline (v1.0) against which future changes, enhancements, and fixes will be evaluated.
+
+1. Customer Contract Dependencies
+REQ-1.1 Contract-Centric Billing
+The brokered customer billing report is fully dependent on the customer contract.
+Business Rules
+All billing data originates from customer contract configuration.
+A billing report cannot exist without a customer contract.
+Contracts are the single source of truth for services, locations, pricing, and billing schedule.
+Technical Rules
+Services are queried from CustomerContractService.
+Services must be linked to a customer contract.
+Contract must have billing_date populated for services to appear.
+
+REQ-1.2 Effective Service Date
+The contract effective service date defines the contract start.
+Business Rules
+Marks the beginning of the contractual relationship.
+Serves as the baseline for all time-based calculations.
+Technical Rules
+Stored in CustomerContract.effective_date.
+Used as fallback when service start dates are missing.
+Used for Annual Price Increase (API) calculations.
+
+REQ-1.3 Contract Term (Months)
+Contract term is defined in months.
+Business Rules
+12 months = 1 year
+60 months = 5 years
+Technical Rules
+Stored in CustomerContract.term (integer).
+Used to calculate contract end date.
+
+REQ-1.4 Contract End Date Calculation
+Contract end date is derived, not manually entered.
+Business Rules
+Defines the contractual expiration point.
+Does not terminate billing visibility.
+Technical Rules
+contract_end_date = effective_date + term (months)
+
+
+REQ-1.5 Post-Expiration Billing Visibility
+Billing continues after contract expiration.
+Business Rules
+Contracts continue on a month-to-month basis after expiration.
+Billing data must remain visible after contract end date.
+Prevents service interruption caused by administrative expiration.
+Technical Rules
+No active expiration filter in billing report queries.
+Previously excluded behavior has been removed.
+
+2. Customer Billing Bucket (Billing Date)
+REQ-2.1 Billing Date Selection
+Each contract must define a billing date.
+Business Rules
+Allowed values: 1st, 15th, 30th
+Defines when billing occurs each month.
+Technical Rules
+Stored in CustomerContract.billing_date.day.
+Required field.
+
+REQ-2.2 Missing Billing Date Exclusion
+Contracts without billing dates are excluded.
+Business Rules
+Prevents undefined or inconsistent billing.
+Technical Rules
+Filter: contract__billing_date__isnull=False.
+
+REQ-2.3 Multi-Month Billing Multiplication
+Billing date determines charge frequency across multi-month periods.
+Business Rules
+Each occurrence of the billing date generates a charge.
+
+
+Example:
+
+ Period Jan–Mar with billing date = 15 → 2 charges (Jan 15, Feb 15).
+
+
+Technical Rules
+Services multiplied by count of billing dates in period.
+
+3. Location & Service Management
+REQ-3.1 Location Association
+Contracts may contain multiple service locations.
+Business Rules
+One contract can bill multiple locations.
+Each location may have unique services and pricing.
+Technical Rules
+Linked via CustomerContractLocation.
+
+REQ-3.2 Location Visibility
+Locations without services are excluded.
+Business Rules
+Empty locations should not appear in reports.
+Technical Rules
+Locations must have at least one active monthly service.
+
+REQ-3.3 Zero-Priced Monthly Services (Visibility Rule)
+Monthly services with $0.00 pricing must still display.
+Business Rules
+Monthly services define the contractual service structure.
+Zero-priced monthly services must remain visible.
+Technical Rules
+Required change: remove .exclude(price=0) from available_fixed_services().
+Continue excluding price IS NULL.
+
+REQ-3.4 Service Description Format
+Service descriptions must follow a consistent format.
+Format
+<Service Type> - <Size> - <Container> - Pickup: <Frequency>
+
+Example
+MSW - 1 - 8 - Pickup: 3x/week
+
+
+REQ-3.5 Missing Service Start Date
+Services without a start date inherit contract start date.
+Technical Rule
+start = service.effective_date_from OR contract.effective_date
+
+
+REQ-3.6 Missing Service End Date
+Services without an end date never expire.
+Business Rules
+Service remains active until explicitly ended.
+
+REQ-3.7 Service Expiration Handling
+Expired services do not appear in future billing periods.
+Technical Rule
+Service excluded if effective_date_to < billing_period_start.
+
+REQ-3.8 Monthly vs On-Demand Services
+Different display rules apply by service type.
+Business Rules
+Monthly services: Always displayed (even $0.00).
+On-demand services: Displayed only if price > $0.00.
+
+REQ-3.9 Management Fees
+Location management fees must be billed.
+Business Rules
+Fixed fee per billing occurrence.
+Technical Rules
+management_fee × number_of_billing_dates
+
+
+4. Multi-Location Add-On Charges
+REQ-4.1 Multi-Location Groups
+Multi-location groups contain on-demand services.
+
+REQ-4.2 Zero-Priced On-Demand Exclusion
+On-demand services with $0.00 pricing are excluded.
+
+REQ-4.3 Location-Specific Application
+On-demand services apply only to selected locations.
+
+5. Percentage-Based Charges
+REQ-5.1 Percentage Charge Formula
+Percentage Charge = Base Amount × Percentage Rate
+
+
+REQ-5.2 – REQ-5.5 Date Validity
+Percentage charges:
+Activate on start date
+Expire on end date
+Must overlap billing period
+Use contract dates if NULL
+
+6. Annual Price Increases (APIs)
+REQ-6.1 Selective Application
+Customers select which contract years apply an annual price increase. Only selected years trigger a percentage adjustment.
+REQ-6.2 Custom Percentage Caps
+Each selected year has its own configurable percentage cap (e.g., Year 2 = 4%, Year 3 = 6%). Percentages are not required to be uniform across years.
+REQ-6.3 Compounding Calculation
+Each increase is calculated on the previous year's final price—not the original base price. This creates a compounding effect across consecutive selected years.
+REQ-6.4 Skipped Year Handling
+Unselected years freeze the price at the last calculated amount. No increase applies, but the accumulated price from prior selected years carries forward unchanged.
+REQ-6.5 Year Determination
+The system calculates applicable APIs using the calendar year difference between the contract effective date and the billing month (e.g., effective date 03/01/2024 to billing month 03/2025 = 1 year passed = Year 2 rates apply if selected).
+REQ-6.6 Future API Exclusion
+Only APIs with an effective date on or before the billing month are included in calculations. Future-dated APIs are ignored until their effective date is reached.
+
+7. Pass-Through Charges
+REQ-7.1 Source
+Pass-through charges originate from hauler invoices.
+
+REQ-7.2 Period Overlap Requirement
+Only invoices overlapping the pass-through period are included.
+
+REQ-7.3 Margin Application
+Default margin: 20%, configurable per report.
+
+REQ-7.4 Monthly Service Dependency
+Pass-throughs only appear for locations with monthly services.
+
+REQ-7.5 Hauler Contract Percentages
+Optional additional percentages may apply and compound.
+
+8. Report Generation & Display
+REQ-8.1 Header Content
+Report ID, date, periods, and margin must be displayed.
+
+REQ-8.2 Location Grouping
+Locations displayed with ID, address, and store number.
+
+REQ-8.3 Service Listing
+Each service shows description and final calculated amount.
+
+REQ-8.4 Summary Section
+Summary includes:
+Fuel & Environmental Charges
+Subtotal
+Management Fee
+GTS Fee ($0.00)
+Grand Total
+Hauler Cost
+Net Profit
+
+REQ-8.5 Margin Disclosure
+Margin note displayed when applicable.
+
+9. Hauler Cost Calculation
+REQ-9.1 Eligible Locations
+Hauler costs are calculated exclusively for service locations where service_performed contains "Brokered". Non-brokered locations are excluded from hauler cost calculations.
+REQ-9.2 Invoice Selection Criteria
+Invoices are included only when:
+invoice.service_from ≤ billing period end date
+invoice.service_to ≥ billing period start date
+Both service dates are not null
+invoice.is_duplicate = False
+REQ-9.3 Active Contract Validation
+Invoices are excluded if the associated contract was not active during the invoice service period. Contract status is verified against the invoice date range—inactive or expired contracts do not generate hauler costs even if invoices exist.
+REQ-9.4 Proration Methodology
+Invoice amounts are prorated based on calendar days overlap:
+Prorated Amount = Invoice Amount × (Overlap Days ÷ Total Invoice Days)
+
+Where:
+Overlap Days: Count of days where invoice service period intersects with billing period
+Total Invoice Days: Count of days in the invoice's full service period
+REQ-9.5 Multi-Invoice Aggregation
+When multiple invoices overlap with the billing period for the same location, each invoice is prorated independently and summed to determine total hauler cost for that location.
+
+10. Output & Delivery
+REQ-10.1 Data Processing Flow
+Contracts → Services → Dates → Pricing → Grouping → Summary.
+
+REQ-10.2 PDF Generation
+Billing report generated as PDF using dynamic template.
+
+Sign-Off
+Prepared by: Techverx Development Team
+Date: February 2026
+Approved by: _______________________ Date: __________
+Approved by: _______________________ Date: __________
+Approved by: _______________________ Date: __________
+Questions & Answers (Brokered Billing Report)
+
+Q1: What determines whether a customer appears in the brokered billing report?
+A:
+A customer appears only if they have at least one active customer contract with a defined billing date and at least one billable service within the selected billing period.
+
+Q2: Can a single customer have multiple brokered billing reports for the same period?
+A:
+No. A customer receives one brokered billing report per billing period, regardless of the number of contracts or locations included.
+
+Q3: Why are contracts without services excluded from the report?
+A:
+Contracts without services cannot generate charges. Including them would create empty or misleading billing output.
+
+Q4: How does the system determine which services are billable for a period?
+A:
+A service is billable if its effective date range overlaps with the billing period and it meets pricing and service-type visibility rules.
+
+Q5: Why do some services appear with the same charge repeated multiple times?
+A:
+Monthly services are charged once per billing date occurrence. If multiple billing dates fall within the billing period, the service charge is multiplied accordingly.
+
+Q6: Are services billed if they start mid-month?
+A:
+Yes. Services that start during the billing period are billed if their effective start date occurs on or before a billing date within the period.
+
+Q7: Are services billed if they end mid-month?
+A:
+Yes. Services remain billable through their effective end date, provided they overlap with at least one billing date in the period.
+
+Q8: How are location-level totals calculated?
+A:
+Each location's total is calculated by summing all applicable monthly services, on-demand services, management fees, pass-through charges, and applicable percentage-based charges.
+
+Q9: Why might two locations under the same contract have different totals?
+A:
+Each location may have different services, pricing, management fees, on-demand usage, and hauler costs, resulting in different totals.
+
+Q10: How are management fees applied in brokered billing?
+A:
+Management fees are fixed charges applied per location and multiplied by the number of billing date occurrences in the billing period.
+
+Q11: Why are some on-demand services missing from the report?
+A:
+On-demand services are shown only when their price is greater than $0.00 and when they apply to at least one selected service location.
+
+Q12: How are multi-location add-on services handled?
+A:
+Multi-location add-ons are applied only to the locations explicitly selected in the add-on configuration and are calculated independently per location.
+
+Q13: Why are pass-through charges not shown for some locations?
+A:
+Pass-through charges appear only for locations that have active monthly services and qualifying hauler invoices overlapping the billing period.
+
+Q14: How does the system prevent duplicate hauler charges?
+A:
+Invoices marked as duplicates are excluded from calculations to prevent double billing.
+
+Q15: Why are hauler costs prorated instead of fully charged?
+A:
+Invoices often span a longer date range than the billing period. Proration ensures only the portion overlapping the billing period is charged.
+
+Q16: How is net profit calculated in brokered billing reports?
+A:
+Net profit is calculated as the difference between total billed charges and total hauler costs for each location, then aggregated at the report level.
+
+Q17: Can historical billing reports change after generation?
+A:
+No. Once generated, a billing report reflects the data as of that point in time. Subsequent contract or service changes do not retroactively alter past reports.
+
+Q18: What happens if a service price is updated after a report is generated?
+A:
+The updated price applies only to future billing periods. Previously generated reports remain unchanged.
+
+Q19: Why does the report still show locations that are no longer owned by the customer?
+A:
+Locations remain visible if they are still linked to an active contract. Ownership changes must be reflected by updating or removing the location from the contract.
+
+Q20: What is considered the source of truth when discrepancies are found?
+A:
+The customer contract and this Brokered Billing Report requirements document (v1.0) together define the authoritative source of truth for billing behavior.
+
+================================================================================
+Requirements 1.1
+Brokered Customer Billing Report
+🔄 Version 1.1 – Summary of Updates
+Release Date: February 2026
+Change Type: Functional Enhancement
+✅ Enhancement: Fuel & Environmental Charges Updated to Include Pass-Through Charges
+In Version 1.1, the calculation logic for Fuel & Environmental (F&E) percentage-based charges has been updated.
+Previous Behavior (v1.0)
+Fuel & Environmental charges were applied only to core service charges.
+Pass-through charges were excluded from the fuel calculation base.
+Updated Behavior (v1.1)
+Fuel & Environmental percentage charges are now applied to:
+Monthly service charges
+On-demand service charges
+Pass-through charges (including overages and invoice-derived charges)
+Updated Calculation Logic
+Fuel & Environmental Base = Service Charges + On-Demand Charges + Pass-Through Charges
+Fuel Charge = Fuel Base × Applicable Percentage
+
+Business Impact
+Ensures consistent percentage application across all revenue-generating service components.
+Aligns billing output with updated business policy.
+Produces higher but accurate Fuel & Environmental totals when pass-through charges exist.
+Improves transparency in subtotal calculations.
+Scope of Change
+Affects REQ-8.4 Summary Section.
+Introduces REQ-8.4.1 Fuel & Environmental Charges – Pass-Through Inclusion.
+No changes to hauler cost calculations.
+No changes to margin application logic.
+
+1. Customer Contract Dependencies
+REQ-1.1 Contract-Centric Billing
+The brokered customer billing report is fully dependent on the customer contract.
+Business Rules
+All billing data originates from customer contract configuration.
+A billing report cannot exist without a customer contract.
+Contracts are the single source of truth for services, locations, pricing, and billing schedule.
+Technical Rules
+Services are queried from CustomerContractService.
+Services must be linked to a customer contract.
+Contract must have billing_date populated for services to appear.
+
+REQ-1.2 Effective Service Date
+The contract effective service date defines the contract start.
+Business Rules
+Marks the beginning of the contractual relationship.
+Serves as the baseline for all time-based calculations.
+Technical Rules
+Stored in CustomerContract.effective_date.
+Used as fallback when service start dates are missing.
+Used for Annual Price Increase (API) calculations.
+
+REQ-1.3 Contract Term (Months)
+The contract term is defined in months.
+Business Rules
+12 months = 1 year
+60 months = 5 years
+Technical Rules
+Stored in CustomerContract.term (integer).
+Used to calculate contract end date.
+
+REQ-1.4 Contract End Date Calculation
+Contract end date is derived, not manually entered.
+Business Rules
+Defines the contractual expiration point.
+Does not terminate billing visibility.
+Technical Rules
+contract_end_date = effective_date + term (months)
+
+
+REQ-1.5 Post-Expiration Billing Visibility
+Billing continues after contract expiration.
+Business Rules
+Contracts continue on a month-to-month basis after expiration.
+Billing data must remain visible after contract end date.
+Prevents service interruption caused by administrative expiration.
+Technical Rules
+No active expiration filter in billing report queries.
+Previously excluded behavior has been removed.
+
+2. Customer Billing Bucket (Billing Date)
+REQ-2.1 Billing Date Selection
+Each contract must define a billing date.
+Business Rules
+Allowed values: 1st, 15th, 30th
+Defines when billing occurs each month.
+Technical Rules
+Stored in CustomerContract.billing_date.day.
+Required field.
+
+REQ-2.2 Missing Billing Date Exclusion
+Contracts without billing dates are excluded.
+Business Rules
+Prevents undefined or inconsistent billing.
+Technical Rules
+Filter: contract__billing_date__isnull=False.
+
+REQ-2.3 Multi-Month Billing Multiplication
+Billing date determines charge frequency across multi-month periods.
+Business Rules
+Each occurrence of the billing date generates a charge.
+
+
+Example:
+
+ Period Jan–Mar with billing date = 15 → 2 charges (Jan 15, Feb 15).
+
+
+Technical Rules
+Services multiplied by count of billing dates in period.
+
+3. Location & Service Management
+REQ-3.1 Location Association
+Contracts may contain multiple service locations.
+Business Rules
+One contract can bill multiple locations.
+Each location may have unique services and pricing.
+Technical Rules
+Linked via CustomerContractLocation.
+
+REQ-3.2 Location Visibility
+Locations without services are excluded.
+Business Rules
+Empty locations should not appear in reports.
+Technical Rules
+Locations must have at least one active monthly service.
+
+REQ-3.3 Zero-Priced Monthly Services (Visibility Rule)
+Monthly services with $0.00 pricing must still display.
+Business Rules
+Monthly services define the contractual service structure.
+Zero-priced monthly services must remain visible.
+Technical Rules
+Required change: remove .exclude(price=0) from available_fixed_services().
+Continue excluding price IS NULL.
+
+REQ-3.4 Service Description Format
+Service descriptions must follow a consistent format.
+Format
+<Service Type> - <Size> - <Container> - Pickup: <Frequency>
+
+Example
+MSW - 1 - 8 - Pickup: 3x/week
+
+
+REQ-3.5 Missing Service Start Date
+Services without a start date inherit contract start date.
+Technical Rule
+start = service.effective_date_from OR contract.effective_date
+
+
+REQ-3.6 Missing Service End Date
+Services without an end date never expire.
+Business Rules
+Service remains active until explicitly ended.
+
+REQ-3.7 Service Expiration Handling
+Expired services do not appear in future billing periods.
+Technical Rule
+Service excluded if effective_date_to < billing_period_start.
+
+REQ-3.8 Monthly vs On-Demand Services
+Different display rules apply by service type.
+Business Rules
+Monthly services: Always displayed (even $0.00).
+On-demand services: Displayed only if price > $0.00.
+
+REQ-3.9 Management Fees
+Location management fees must be billed.
+Business Rules
+Fixed fee per billing occurrence.
+Technical Rules
+management_fee × number_of_billing_dates
+
+
+4. Multi-Location Add-On Charges
+REQ-4.1 Multi-Location Groups
+Multi-location groups contain on-demand services.
+
+REQ-4.2 Zero-Priced On-Demand Exclusion
+On-demand services with $0.00 pricing are excluded.
+
+REQ-4.3 Location-Specific Application
+On-demand services apply only to selected locations.
+
+5. Percentage-Based Charges
+REQ-5.1 Percentage Charge Formula
+Percentage Charge = Base Amount × Percentage Rate
+
+
+REQ-5.2 – REQ-5.5 Date Validity
+Percentage charges:
+Activate on start date
+Expire on end date
+Must overlap billing period
+Use contract dates if NULL
+
+6. Annual Price Increases (APIs)
+REQ-6.1 Selective Application
+Customers select which contract years apply an annual price increase. Only selected years trigger a percentage adjustment.
+REQ-6.2 Custom Percentage Caps
+Each selected year has its own configurable percentage cap (e.g., Year 2 = 4%, Year 3 = 6%). Percentages are not required to be uniform across years.
+REQ-6.3 Compounding Calculation
+Each increase is calculated on the previous year's final price—not the original base price. This creates a compounding effect across consecutive selected years.
+REQ-6.4 Skipped Year Handling
+Unselected years freeze the price at the last calculated amount. No increase applies, but the accumulated price from prior selected years carries forward unchanged.
+REQ-6.5 Year Determination
+The system calculates applicable APIs using the calendar year difference between the contract effective date and the billing month (e.g., effective date 03/01/2024 to billing month 03/2025 = 1 year passed = Year 2 rates apply if selected).
+REQ-6.6 Future API Exclusion
+Only APIs with an effective date on or before the billing month are included in calculations. Future-dated APIs are ignored until their effective date is reached.
+
+7. Pass-Through Charges
+REQ-7.1 Source
+Pass-through charges originate from hauler invoices.
+
+REQ-7.2 Period Overlap Requirement
+Only invoices overlapping the pass-through period are included.
+
+REQ-7.3 Margin Application
+Default margin: 20%, configurable per report.
+
+REQ-7.4 Monthly Service Dependency
+Pass-throughs only appear for locations with monthly services.
+
+REQ-7.5 Hauler Contract Percentages
+Optional additional percentages may apply and compound.
+
+8. Report Generation & Display
+REQ-8.1 Header Content
+Report ID, date, periods, and margin must be displayed.
+
+REQ-8.2 Location Grouping
+Locations displayed with ID, address, and store number.
+
+REQ-8.3 Service Listing
+Each service shows a description and final calculated amount.
+
+REQ-8.4 Summary Section
+Summary includes:
+Fuel & Environmental Charges
+Subtotal
+Management Fee
+GTS Fee ($0.00)
+Grand Total
+Hauler Cost
+Net Profit
+
+
+
+REQ-8.4.1 Fuel & Environmental Charges – Pass-Through Inclusion
+Business Rule
+Fuel and environmental percentage charges must be applied not only to the billed services but also to any included pass-through charges.
+This ensures the subtotal reflects the combined service and pass-through amounts before percentage adjustments.
+Technical Rule
+When calculating Fuel & Environmental Charges:
+Applicable Amount = Service Charges + Pass-Through Charges
+Fuel/Environmental Charge = Applicable Amount × Applicable Percentage
+
+Update report generation logic to include pass-throughs in subtotal before applying percentage-based charges.
+Example
+Service Charge = $1,000
+Pass-Through Charge = $200
+Fuel Surcharge = 5%
+Subtotal for Fuel Surcharge = (1,000 + 200) × 5% = $60
+
+
+This aligns the requirements with your recent feature in #640, ensuring clarity that pass-throughs contribute to percentage-based charges like fuel/environmental fees.
+
+REQ-8.5 Margin Disclosure
+Margin note displayed when applicable.
+
+
+
+
+
+9. Hauler Cost Calculation
+REQ-9.1 Eligible Locations
+Hauler costs are calculated exclusively for service locations where service_performed contains "Brokered". Non-brokered locations are excluded from hauler cost calculations.
+REQ-9.2 Invoice Selection Criteria
+Invoices are included only when:
+invoice.service_from ≤ billing period end date
+invoice.service_to ≥ billing period start date
+Both service dates are not null
+invoice.is_duplicate = False
+REQ-9.3 Active Contract Validation
+Invoices are excluded if the associated contract was not active during the invoice service period. Contract status is verified against the invoice date range—inactive or expired contracts do not generate hauler costs even if invoices exist.
+REQ-9.4 Proration Methodology
+Invoice amounts are prorated based on calendar days overlap:
+Prorated Amount = Invoice Amount × (Overlap Days ÷ Total Invoice Days)
+
+Where:
+Overlap Days: Count of days where invoice service period intersects with billing period
+Total Invoice Days: Count of days in the invoice's full service period
+REQ-9.5 Multi-Invoice Aggregation
+When multiple invoices overlap with the billing period for the same location, each invoice is prorated independently and summed to determine total hauler cost for that location.
+
+
+
+10. Output & Delivery
+REQ-10.1 Data Processing Flow
+Contracts → Services → Dates → Pricing → Grouping → Summary.
+
+REQ-10.2 PDF Generation
+Billing report generated as PDF using dynamic template.
+
+Sign-Off
+Prepared by: Techverx Development Team
+Date: February 2026
+Approved by: _______________________ Date: __________
+Approved by: _______________________ Date: __________
+Approved by: _______________________ Date: __________
+Questions & Answers (Brokered Billing Report)
+
+Q1: What determines whether a customer appears in the brokered billing report?
+A:
+A customer appears only if they have at least one active customer contract with a defined billing date and at least one billable service within the selected billing period.
+
+Q2: Can a single customer have multiple brokered billing reports for the same period?
+A:
+No. A customer receives one brokered billing report per billing period, regardless of the number of contracts or locations included.
+
+Q3: Why are contracts without services excluded from the report?
+A:
+Contracts without services cannot generate charges. Including them would create empty or misleading billing output.
+
+Q4: How does the system determine which services are billable for a period?
+A:
+A service is billable if its effective date range overlaps with the billing period and it meets pricing and service-type visibility rules.
+
+Q5: Why do some services appear with the same charge repeated multiple times?
+A:
+Monthly services are charged once per billing date occurrence. If multiple billing dates fall within the billing period, the service charge is multiplied accordingly.
+
+Q6: Are services billed if they start mid-month?
+A:
+Yes. Services that start during the billing period are billed if their effective start date occurs on or before a billing date within the period.
+
+
+
+Q7: Are services billed if they end mid-month?
+A:
+Yes. Services remain billable through their effective end date, provided they overlap with at least one billing date in the period.
+
+Q8: How are location-level totals calculated?
+A:
+Each location's total is calculated by summing all applicable monthly services, on-demand services, management fees, pass-through charges, and applicable percentage-based charges.
+
+Q9: Why might two locations under the same contract have different totals?
+A:
+Each location may have different services, pricing, management fees, on-demand usage, and hauler costs, resulting in different totals.
+
+Q10: How are management fees applied in brokered billing?
+A:
+Management fees are fixed charges applied per location and multiplied by the number of billing date occurrences in the billing period.
+
+Q11: Why are some on-demand services missing from the report?
+A:
+On-demand services are shown only when their price is greater than $0.00 and when they apply to at least one selected service location.
+
+
+
+
+
+
+Q12: How are multi-location add-on services handled?
+A:
+Multi-location add-ons are applied only to the locations explicitly selected in the add-on configuration and are calculated independently per location.
+
+Q13: Why are pass-through charges not shown for some locations?
+A:
+Pass-through charges appear only for locations that have active monthly services and qualifying hauler invoices overlapping the billing period.
+
+Q14: How does the system prevent duplicate hauler charges?
+A:
+Invoices marked as duplicates are excluded from calculations to prevent double billing.
+
+Q15: Why are hauler costs prorated instead of fully charged?
+A:
+Invoices often span a longer date range than the billing period. Proration ensures only the portion overlapping the billing period is charged.
+
+Q16: How is net profit calculated in brokered billing reports?
+A:
+Net profit is calculated as the difference between total billed charges and total hauler costs for each location, then aggregated at the report level.
+
+
+
+Q17: Can historical billing reports change after generation?
+A:
+No. Once generated, a billing report reflects the data as of that point in time. Subsequent contract or service changes do not retroactively alter past reports.
+
+Q18: What happens if a service price is updated after a report is generated?
+A:
+The updated price applies only to future billing periods. Previously generated reports remain unchanged.
+
+
+Q19: Why does the report still show locations that are no longer owned by the customer?
+A:
+Locations remain visible if they are still linked to an active contract. Ownership changes must be reflected by updating or removing the location from the contract.
+
+Q20: What is considered the source of truth when discrepancies are found?
+A:
+The customer contract and this Brokered Billing Report requirements document (v1.1) together define the authoritative source of truth for billing behavior.
+
+================================================================================
+Requirements 1.1
+Consulting Customer Billing Report
+Document Version: 1.1
+Date: February 12, 2026
+Status: Baseline – Approved for Production
+Prepared By: Techverx Development Team
+
+1. Purpose (Updated – v1.1)
+This document defines the requirements for the Consulting Customer Billing Report, with a focus on savings-driven reporting while respecting user-selected service periods.
+Key updates in v1.1:
+The report must now dynamically respect the billing date range selected by the user.
+Static fields (Benchmark Price, Shared Saving Percentage) remain unchanged and are configuration-driven.
+Dynamic fields (Current Price, Net Savings, GTS Fee, Location Subtotal, Summary totals) are calculated strictly using invoice data within the selected service period.
+Charges that partially overlap the selected date range must be prorated.
+The report is:
+Location-focused
+Savings-driven
+Dynamic according to the selected billing period
+
+2. Scope
+Report Type: consulting_invoice
+Eligibility: Customers with customer_type = "consulting"
+Location Dependency: Financial values come from each location record (Benchmark, Current Price, Net Savings, GTS Fee, Percentage-Based Charges, Management Fee)
+Management Fee: If specified at the contract-location level, must be displayed
+Report Objective: Show savings, GTS Fee, percentage-based charges (if any), Management Fee, net profit, and totals for all contract-linked locations
+
+3. Customer & Contract Rules
+3.1 Contract Continuity
+Reports are generated based on active contract-location relationships
+Contract expiration dates do not automatically remove locations
+Month-to-month continuation applies unless explicitly deactivated
+3.2 Location Inclusion
+All locations linked to the contract must be included
+No filtering based on:
+$0.00 charges
+Savings amount
+Minimum thresholds
+3.3 Management Fees
+Pulled from contract-location record
+Displayed per location if defined
+Contributes to:
+Location Subtotal
+Net Profit
+
+4. Report Structure
+4.1 Header
+Customer Name
+Report ID (Sequential if enabled)
+Billing Period (monthly_start_date – monthly_end_date)
+Report Date (actual generation date)
+
+4.2 Location Details
+Each location row includes:
+Location Identifier
+Address & Store Number
+Benchmark Price (Static)
+Current Price (Dynamic, filtered by date range)
+Net Savings (minimum $0.00)
+GTS Fee %
+GTS Fee (minimum $0.00)
+Percentage-Based Charges (if configured)
+Management Fee (if defined)
+Location Subtotal
+
+4.3 GTS Fee % Priority
+GTS Fee % is determined in the following order:
+Shared Saving Percentage
+Benchmark Percentage
+Default = 50%
+
+5. Calculation Logic
+5.1 Net Savings
+Net Savings = max(0, Benchmark Price − Current Price)
+
+Negative values converted to $0.00
+Label: "Net Saving"
+Benchmark Price = Static (configuration)
+Current Price = Dynamic (filtered by selected billing period)
+
+5.2 GTS Fee
+GTS Fee = Net Savings × (GTS Fee % / 100)
+
+Default = 50% if neither Shared Saving % nor Benchmark % defined
+Calculated per location
+
+5.3 Percentage-Based Charges
+If configured at location level:
+Included in Location Subtotal
+Included in Grand Total Payable
+Displayed per location
+
+5.4 Management Fee
+Pulled from contract-location record
+Treated as $0.00 if missing
+Included in Location Subtotal and Net Profit
+
+5.5 Location Subtotal
+Location Subtotal = Current Price + Percentage-Based Charges (if any) + GTS Fee + Management Fee
+
+
+5.6 Net Profit (Location Level)
+Net Profit = GTS Fee + Management Fee
+
+
+5.7 Grand Total Payable
+Grand Total Payable = Sum of all Location Subtotals
+
+
+6. Report Summary (Updated – v1.1)
+The summary section now distinguishes static vs dynamic totals.
+6.1 Displayed Summary Fields (Frontend may simplify as per UI)
+Mandatory dynamic totals:
+Total Savings
+Total GTS Fees
+Optional totals (calculated, may be hidden per UI design):
+Total Benchmark Price (static)
+Total Current Price (dynamic)
+Total Percentage-Based Charges (dynamic)
+Total Management Fees (dynamic)
+Grand Total Payable (dynamic)
+Note: All dynamic totals respect the user-selected date range.
+
+7. Edge Cases
+7.1 Missing Location Charges
+Current Price defaults to $0.00
+7.2 Zero Savings
+Net Savings = $0.00 → GTS Fee = $0.00
+7.3 Missing Management Fee
+Treated as $0.00
+7.4 Multiple Locations
+All contract-linked locations included
+No minimum charge filters
+
+8. Technical Notes
+All financial calculations are location-driven
+Contract determines inclusion only
+Current Price is sourced from invoices within selected billing period
+Charges partially overlapping the date range must be prorated
+Benchmark Price and GTS Fee % remain static
+
+
+9. Key Differences – Consulting vs Brokered Billing Reports
+Feature
+Brokered Billing Report
+Consulting Billing Report
+Primary Dependency
+Contract + Hauler Invoices
+Contract → Locations only
+Data Source for Charges
+Hauler invoice data
+Location record data
+Benchmark Price
+Not used
+Static, configuration-based
+Current Price Source
+Hauler invoice totals
+Dynamic, filtered by billing period
+Savings Calculation
+Not applicable
+Benchmark − Current Price (min $0.00)
+GTS Fee
+Not applicable
+Calculated from Net Savings
+GTS Fee % Logic
+Not applicable
+Shared Saving % → Benchmark % → 50% default
+Management Fee
+May be contract-level or fixed
+Defined per contract-location (optional)
+Hauler Cost Consideration
+Included
+Not used
+Pass-Through Charges
+Included
+Not applicable
+Minimum Charge Filters
+Applied
+Not applied
+Location Inclusion
+Invoice-based filtering
+All contract-linked locations included
+Net Profit Definition
+Grand Total − Hauler Cost
+GTS Fee + Management Fee
+Calculation Focus
+Cost + hauler reconciliation
+Savings-driven model
+Invoice Dependency
+Required
+Not dependent on hauler invoices
+
+
+10. Sign-Off
+Prepared by: Techverx Development Team
+Date: 02/12/2026
+Approved by: _______________________ Date: __________
+Approved by: _______________________ Date: __________
+Approved by: _______________________ Date: __________
+
+11. Q&A – Consulting Billing Report
+Q1: Why does the report display locations even if charges are low or $0?
+A: All contract-linked locations appear, no minimum filters applied.
+Q2: How is Current Price sourced?
+A: Current Price is dynamic and filtered by the billing period; defaults to $0.00 if no invoices exist.
+Q3: What is Net Saving?
+A: Net Saving = max(0, Benchmark Price − Current Price)
+Q4: How is GTS Fee calculated?
+A: GTS Fee = Net Saving × (GTS Fee % / 100) (priority: Shared Saving %, Benchmark %, Default 50%)
+Q5: When is Management Fee displayed?
+A: Only if defined at contract-location level; included in Location Subtotal & Net Profit
+Q6: How is Net Profit calculated?
+A: Net Profit = GTS Fee + Management Fee
+Q7: Can Net Savings be negative?
+A: No. Negative savings = $0.00
+Q8: Why are labels changed from "Your Saving"?
+A: Standardized to "Net Saving" and removed green highlighting
+Q9: Does the report depend on hauler invoices?
+A: No. Report is location-based
+Q10: Are expired contracts excluded?
+A: No. Locations remain if the contract-location relationship is active
+Q11: Can locations with $0 Current Price show GTS Fee?
+A: Only if Benchmark Price > 0
+Q12: How does the report handle multiple locations?
+A: All contract-linked locations included; each has own subtotal
+Q13: What determines GTS Fee % per location?
+A: Shared Saving % → Benchmark % → Default 50%
+Q14: What is the Grand Total Payable?
+A: Sum of all location subtotals
+Q15: How does consulting differ from brokered reports?
+A: Savings-driven, location-based; brokered is cost-reconciliation-based
+Q16: What if a location has no charges?
+A: Current Price defaults to $0.00; Net Saving & GTS Fee calculated accordingly
+Q17: Are minimum charge filters applied?
+A: No
+Q18: Authoritative source of truth?
+A: Location record data, contract-location relationship, this document
+Q19: Can historical consulting reports change?
+A: No. Reports are immutable
+Q20: How are report subtotals structured?
+Location Subtotal = Current Price + Percentage-Based Charges (if any) + GTS Fee + Management Fee
+
+
+12. Addendum – Date Range & Static Field Clarification (v1.1)
+Effective Date: February 12, 2026
+Applies To: Consulting Customer Billing Report v1.0
+Key Updates:
+Service-period-based invoice filtering
+Historical month accuracy
+Proration for partial overlaps
+Explicit clarification of static fields
+Explicit clarification of dynamic fields
+No other requirements from Version 1.0 were modified.

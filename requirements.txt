@@ -1,0 +1,10 @@
+langchain
+openai
+chromadb
+tiktoken
+python-dotenv
+fastapi
+uvicorn
+streamlit
+langchain-openai
+langchain-community
